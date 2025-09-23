@@ -1,0 +1,384 @@
+import json
+import numpy as np
+#from numpy.linalg import norm
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+
+
+class Body:
+    """ 
+    A class for defining celestial bodies
+    """
+    
+    def __init__(self, bodies_data, bodies_selected, grav_const, dt):
+        """
+        Initialises the celestial bodies
+
+        Parameters
+        ----------
+        bodies_data : list of dict
+            list of dictionaries with information of celestial bodies
+        bodies_selected : list of dict
+            list of dictionaries of selected number of celestial bodies
+        grav_const : float
+            gravitational constant, G
+        dt : float
+            timestep used in calculations
+
+
+        """
+        self.bodies_selected = len(bodies_selected)
+        self.name = ['' for _ in range(self.bodies_selected)]
+        self.mass = np.zeros(self.bodies_selected)
+        self.orbital_radius = np.zeros(self.bodies_selected)
+        self.colour = ['' for _ in range(self.bodies_selected)]
+        self.grav_const = grav_const
+        self.dt = dt
+        
+        self.position = np.zeros((self.bodies_selected, 2), dtype = np.float64)
+        self.velocity = np.zeros((self.bodies_selected, 2), dtype = np.float64)
+       
+        self.p_acceleration = np.zeros((self.bodies_selected, 2), dtype = np.float64)
+        self.c_acceleration = np.zeros((self.bodies_selected, 2), dtype = np.float64) 
+
+        for i in range(self.bodies_selected):
+            self.name[i] = bodies_data[i]['name']
+            self.mass[i] = bodies_data[i]['mass'] 
+            self.orbital_radius[i] = bodies_data[i]['orbital_radius']
+            self.colour[i] = bodies_data[i]['colour']
+            
+            self.position[i] = np.array([self.orbital_radius[i], 0])
+            
+        sun_mass = self.mass[0]
+        for i in range(1, self.bodies_selected):
+                kep_approx = np.sqrt((self.grav_const * sun_mass)/self.orbital_radius[i])
+                self.velocity[i] = np.array([0, kep_approx])
+                
+        self.c_acceleration = self.calc_acc()
+        self.p_acceleration = self.c_acceleration.copy()
+        
+    def calc_acc(self):
+        """
+        Calculates the acceleration of the celestial bodies, called upon at several points through code
+
+        Returns
+        -------
+        n_acc : np.ndarray
+            array of accelerations for each body in the system
+
+        """
+        
+        n_acc = np.zeros((self.bodies_selected, 2), dtype = np.float64)
+
+        for i in range(self.bodies_selected):
+            for j in range(self.bodies_selected):
+                if i != j:
+                    vec = self.position[j] - self.position[i]
+                    vec_mag = np.linalg.norm(vec)
+                    if vec_mag > 0:
+                        n_acc[i] += (self.grav_const*(self.mass[j]/(vec_mag)**3)*vec)
+        return n_acc
+    
+    def beeman_method(self):
+        """Updates position and velocity using Beeman method"""
+        self.position += (self.velocity*self.dt) + (1/6)*((4*self.c_acceleration)-self.p_acceleration)*(self.dt**2)
+        n_acceleration = self.calc_acc()
+        self.velocity += 1/6*((2*n_acceleration) + (5*self.c_acceleration) - self.p_acceleration)*self.dt
+
+        self.p_acceleration = self.c_acceleration.copy()
+        self.c_acceleration = n_acceleration.copy()
+        
+    def e_cromer_method(self):
+        """Updates position and velocity using Euler-Cromer method"""
+        acceleration = self.calc_acc()
+        self.velocity += acceleration * self.dt
+        self.position += self.velocity * self.dt
+        
+    def euler_method(self):
+        """Updates position and velocity using Direct Euler method"""
+        acceleration = self.calc_acc()
+        self.position += self.velocity * self.dt
+        self.velocity += acceleration * self.dt
+        
+    def total_energy(self):
+        """
+        Function to calculate and return the total energy of the system 
+
+        Returns
+        -------
+        total_energy : float
+            total energy of the system
+
+        """
+        system_ke = 0
+        system_pe = 0
+        
+        for i in range(self.bodies_selected):
+            mag_vel = np.linalg.norm(self.velocity[i])
+            indiv_ke = 1/2 * self.mass[i] * (mag_vel)**2
+            system_ke += indiv_ke
+            
+            
+        for i in range(self.bodies_selected):
+            for j in range(i+1, self.bodies_selected):
+                vec = self.position[j] - self.position[i]
+                mag_vec = np.linalg.norm(vec)
+                system_pe += (self.grav_const * self.mass[i] * self.mass[j])/mag_vec
+                system_pe *= (-1/2)
+    
+        total_energy = system_ke + system_pe
+        
+        return total_energy
+    
+    
+class Experiments:
+    """
+    A class for running the two mandatory experiments and my chosen one (experiment 4)
+    """
+    def __init__(self, sim_i, sim_all):
+        """
+        Inititalises the necessary variables for experiment setup 
+
+        Parameters
+        ----------
+        sim_i : Simulation
+            when called only the individual method chosen is ran
+        sim_all : Simulation
+            when called all three methods are ran and their total energies saved
+
+
+        """
+        self.sim_i = sim_i
+        self.sim_all = sim_all
+        
+        self.positions = np.array(self.sim_i.pos_hist) #shape: (timesteps, bodies, 2)
+        self.timesteps = self.positions.shape[0]
+        self.num_bodies = self.positions.shape[1]
+    
+    def compute_periods(self):
+        """Computes orbital period of each body by detecting when y-sign changes"""
+        completed = np.zeros(self.num_bodies, dtype=bool)
+        prev_sign = np.sign(self.positions[0, :, 1] - self.positions[0, 0, 1])  # could implement into t range and do t-1 . relative to Sun (index 0)
+
+        for t in range(self.timesteps):
+            for i in range(1, self.num_bodies):  
+                if completed[i]:
+                    continue  # Skip if first orbit already found
+
+                current_sign = np.sign(self.positions[t, i, 1] - self.positions[t, 0, 1])
+                
+                if prev_sign[i] < 0 and current_sign > 0:
+                    completed[i] = True
+                    period = self.sim_i.system.dt * t
+                    print(f"Time taken for {self.sim_i.system.name[i]} to complete orbit: {period:2g} * Earth's tropical orbit period")
+                
+                prev_sign[i] = current_sign
+                
+    def energy_con(self):
+        """Uses the sim_all function to get the total energies over all methods then plot them against each other"""
+        energies = np.array(self.sim_all.t_energy_beeman)
+        
+        stamps = np.arange(len(energies))
+
+        plt.figure(figsize=(10, 6))
+        
+        plt.plot(stamps, self.sim_all.t_energy_beeman, label='Beeman Method', color='blue', linestyle='-')
+        plt.plot(stamps, self.sim_all.t_energy_e_cromer, label='Euler-Cromer Method', color='red', linestyle='-')
+        plt.plot(stamps, self.sim_all.t_energy_euler, label='Direct Euler Method', color='green', linestyle='-')
+
+        
+        #plt.ylim(min (-10) ,max (10))
+        plt.title('Total System Energy for Different Methods')
+        plt.xlabel('Timestamp')
+        plt.ylabel('Total System Energy (J)')
+        plt.legend()
+        plt.show()
+        
+    def alignment(self, tolerance):
+        """
+        Detects planetary alignments with mean angle with tolerance of self.tolerance
+
+        Parameters
+        ----------
+        tolerance : float
+            number of degrees tolerance for mean angle
+
+        """
+        self.tolerance = tolerance
+
+        angle = np.zeros((self.timesteps, self.num_bodies))
+        alignments = []
+        
+        for i in range(1, self.num_bodies):
+            for t in range(self.timesteps):
+                x_pos = self.positions[t, i, 0] - self.positions[t, 0, 0]
+                y_pos = self.positions[t, i, 1] - self.positions[t, 0, 1]
+                angle[t, i] = np.degrees(np.arctan2(y_pos, x_pos)) 
+                
+        for t in range(self.timesteps):
+            angles = angle[t, 1: self.num_bodies]
+            sorted_angles = np.sort(angles)
+            mean_angle = np.mean(angles)
+            diffs = np.diff(np.concatenate([sorted_angles, [sorted_angles[0] + 360]]))
+            max_gap = np.max(diffs)
+            angular_range = 360 - max_gap
+            mean_angle_upper = mean_angle + self.tolerance
+            mean_angle_lower = mean_angle - self.tolerance
+            
+            if mean_angle_lower <= angular_range <= mean_angle_upper:
+                    align_time = t * self.sim_i.system.dt
+                    alignments.append(round(align_time, 1))
+        print("Alignments detected at times:", alignments)
+            
+
+class Simulation:
+    
+    
+    def __init__(self, system, num_iterations):
+        """
+        Initialise simulation with given system and number of iterations
+
+        Parameters
+        ----------
+        system : object
+            the system i.e. = Body(...)
+        num_iterations : int
+            the number of iterations
+
+        """
+        self.system = system
+        self.num_iterations = num_iterations
+        
+    def run_individual(self, method, filename):
+        """
+        Run individual method, the positions are saved for use elsewhere and the energies are written into a file
+
+        Parameters
+        ----------
+        method : str
+            the chosen method e.g. 'beeman_method'
+        filename : str
+            name of file to which you want the energies stored over time
+
+        """
+        self.method = method
+        self.filename = filename
+        
+        self.pos_hist = []
+        self.e_hist = []
+    
+        for i in range(self.num_iterations):
+            
+            method_called = getattr(self.system, self.method)
+            method_called()
+            self.pos_hist.append(self.system.position.copy())
+            
+            if i % 1000==0:
+                self.e_hist.append(self.system.total_energy().copy())
+                
+        self.pos_hist = np.array(self.pos_hist)   
+        self.e_hist = np.array(self.e_hist)
+        np.savetxt(self.filename, self.e_hist)
+        
+    def run_all(self):
+        """Runs all three methods and saves energy of each to graph"""
+        self.t_energy_beeman = []
+        self.t_energy_e_cromer = []
+        self.t_energy_euler = []
+        
+        for i in range(self.num_iterations):
+            self.system.beeman_method()
+            self.t_energy_beeman.append(self.system.total_energy())
+            
+        for i in range(self.num_iterations):
+            self.system.e_cromer_method()
+            self.t_energy_e_cromer.append(self.system.total_energy())
+            
+        for i in range(self.num_iterations):
+            self.system.euler_method()
+            self.t_energy_euler.append(self.system.total_energy())
+        
+        
+class Animation:
+    
+    
+    def __init__(self, sim_i):
+        """
+        Initialises simulation object to get required information (positions) for animation
+
+        Parameters
+        ----------
+        sim_i : Simulation
+            when called only the individual method chosen is ran
+
+        """
+        self.sim_i = sim_i
+        self.fig, self.ax = plt.subplots()
+        
+        self.ax.set_xlim(-7, 7) # 7 is an arbitrary number
+        self.ax.set_ylim(-7, 7)
+        self.ax.set_xlabel("x (Au)")
+        self.ax.set_ylabel("y (Au)")
+        self.ax.set_aspect("equal")
+
+        self.patches = [plt.Circle((0, 0), 0.1, color=self.sim_i.system.colour[i], animated=True) for i in range(self.sim_i.system.bodies_selected)]
+        for patch in self.patches:
+            self.ax.add_patch(patch)
+        
+    def animate(self, i):
+        """
+        Updates positions for animation at frame i 
+
+        Parameters
+        ----------
+        i : int
+            the current frame
+
+        Returns
+        -------
+        list 
+            a list of the patches that represent the bodies
+
+        """
+        for j in range(len(self.patches)):
+            self.patches[j].center = self.sim_i.pos_hist[i, j]
+        return self.patches
+    
+    def run(self):
+        """Run animation"""
+        self.anim = FuncAnimation(self.fig, self.animate, frames=len(self.sim_i.pos_hist), interval=10, blit=True)
+        plt.show()
+        
+    
+
+
+if __name__=="__main__":
+    
+    with open('parameters_solar.json') as file:
+        parameters_solar = json.load(file)
+        
+    bodies_data = parameters_solar['bodies']
+    bodies_selected = bodies_data[:6] #can choose number of planets 0, 9 
+    num_iterations = parameters_solar['num_iterations']
+    dt = parameters_solar['timestep']
+    grav_const = parameters_solar['grav_const']
+    
+    system = Body(bodies_data, bodies_selected, grav_const, dt)
+    
+    sim_i = Simulation(system, num_iterations)
+    sim_i.run_individual(method = "beeman_method", filename = "total_system_energy.txt")
+    #beeman_method
+    #e_cromer_method
+    #euler_method
+    ani = Animation(sim_i)
+    ani.run()
+    
+    sim_all = Simulation(system, num_iterations)
+    sim_all.run_all()
+    
+    exp = Experiments(sim_i, sim_all)
+    exp.simulation = sim_all 
+    #periods = exp.compute_periods()
+    energy_conservation = exp.energy_con()
+    #alignments = exp.alignment(5)
+    
